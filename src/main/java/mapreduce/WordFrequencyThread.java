@@ -16,6 +16,18 @@ public class WordFrequencyThread implements Runnable {
         // System.out.println("Thread started for file: " + inputFile);
         Words wordsObj = new Words();
         this.wordFrequency = wordsObj.frequencyWords(inputFile);
+        StringBuilder sb = new StringBuilder();
+        sb.append("Top 20 most frequent words for file: ")
+                .append(inputFile)
+                .append("\n");
+        wordFrequency.entrySet().stream()
+                .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
+                .limit(20)
+                .forEach(e -> sb.append(e.getKey())
+                        .append(": ")
+                        .append(e.getValue())
+                        .append("\n"));
+        System.out.println(sb.toString());
         // System.out.println("Thread finished for file: " + inputFile);
     }
 

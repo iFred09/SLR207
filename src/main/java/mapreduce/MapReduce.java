@@ -5,8 +5,8 @@ import java.util.*;
 
 public class MapReduce {
     public static void main(String[] args) {
-        String inputFile = "texts/CC-MAIN-20230321002050-20230321032050-00472.warc.wet";
-        int numberOfThreads = Integer.parseInt(args[0]); // or adjust based on your CPU cores
+        String inputFile = args[0];
+        int numberOfThreads = Integer.parseInt(args[1]);
 
         List<String> allLines = new ArrayList<>();
 
@@ -48,9 +48,6 @@ public class MapReduce {
             }
         }
 
-        long endTime = System.currentTimeMillis();
-        System.out.println("MapReduce on single file completed in " + (endTime - startTime) + " ms");
-
         // 🔹 Reduce: Merge all thread results
         HashMap<String, Integer> finalFreq = new HashMap<>();
         for (ChunkWordFrequencyThread worker : workers) {
@@ -60,10 +57,19 @@ public class MapReduce {
         }
 
         // 🔹 Output: Top 20 most frequent words
-        System.out.println("Top 20 most frequent words:");
+        StringBuilder sb = new StringBuilder();
+        sb.append("Top 20 most frequent words for file: ")
+                .append(inputFile)
+                .append("\n");
         finalFreq.entrySet().stream()
                 .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
                 .limit(20)
-                .forEach(e -> System.out.println(e.getKey() + ": " + e.getValue()));
+                .forEach(e -> sb.append(e.getKey())
+                        .append(": ")
+                        .append(e.getValue())
+                        .append("\n"));
+        System.out.println(sb.toString());
+        long endTime = System.currentTimeMillis();
+        System.out.println("MapReduce on single file completed in " + (endTime - startTime) + " ms");
     }
 }
