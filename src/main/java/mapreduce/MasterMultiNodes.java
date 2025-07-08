@@ -152,11 +152,14 @@ public class MasterMultiNodes {
     }
 
     public static void main(String[] args) throws InterruptedException {
-        if (args.length < 1) {
-            System.err.println("Usage: java MasterMultiNodes <textsDirOrFile>");
+        if (args.length < 2) {
+            System.err.println("Usage: java MasterMultiNodes <wetFile> <masterIp>");
             return;
         }
-        MasterMultiNodes master = new MasterMultiNodes(args[0]);
+        String textsPath = args[0];
+        String masterIp = args[1];
+        System.out.println("Master IP set to " + masterIp);
+        MasterMultiNodes master = new MasterMultiNodes(textsPath);
         master.start();
         master.runPipeline();
     }
