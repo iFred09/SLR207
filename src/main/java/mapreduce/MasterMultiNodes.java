@@ -9,13 +9,13 @@ import java.util.stream.Stream;
 
 public class MasterMultiNodes {
     private final int port = 5000;          // Port d'écoute fixe
-    private final String textsDir;          // Répertoire contenant les fichiers .wet
+    private final String textsPath;          // Chemin vers un dossier ou fichier .wet
     private final List<WorkerHandler> workers = new CopyOnWriteArrayList<>();
     private final ExecutorService exec = Executors.newCachedThreadPool();
     private ServerSocket server;            // Serveur principal
 
-    public MasterMultiNodes(String textsDir) {
-        this.textsDir = textsDir;
+    public MasterMultiNodes(String textsPath) {
+        this.textsPath = textsPath;
     }
 
     /**
@@ -29,8 +29,6 @@ public class MasterMultiNodes {
             System.err.println("Failed to start Master on port " + port + ": " + e.getMessage());
             return;
         }
-
-        // Accept worker connections asynchronously
         exec.submit(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
@@ -40,7 +38,6 @@ public class MasterMultiNodes {
                     exec.submit(handler);
                 } catch (IOException e) {
                     System.err.println("Error accepting worker connection: " + e.getMessage());
-                    // If server is closed, break
                     if (server.isClosed()) break;
                 }
             }
@@ -49,21 +46,74 @@ public class MasterMultiNodes {
 
     /**
      * Exécute les phases Map, Shuffle, Reduce en séquence.
+     * Gère le cas où textsPath est un dossier ou un fichier unique.
      */
     public void runPipeline() throws InterruptedException {
-        // Chargement des splits depuis le répertoire textsDir
-        List<String> splits = new ArrayList<>();
-        try (Stream<Path> paths = Files.list(Paths.get(textsDir))) {
-            splits = paths
-                    .filter(p -> p.toString().endsWith(".wet"))
-                    .map(Path::toString)    // chemin complet
-                    .toList();
+        // Lecture de la liste des Workers
+        List<String> workersList;
+        try {
+            workersList = Files.readAllLines(Paths.get("workers.txt"));
         } catch (IOException e) {
-            System.err.println("Error reading splits in " + textsDir + ": " + e.getMessage());
+            System.err.println("Cannot read workers.txt: " + e.getMessage());
+            return;
+        }
+        int nWorkers = workersList.size();
+        if (nWorkers == 0) {
+            System.err.println("No workers defined in workers.txt");
             return;
         }
 
-        // Donne le temps aux Workers de se connecter
+        // Préparation du répertoire de splits
+        Path splitsDir = Paths.get("splits");
+        try {
+            if (Files.exists(splitsDir)) {
+                Files.walk(splitsDir)
+                        .sorted(Comparator.reverseOrder())
+                        .map(Path::toFile)
+                        .forEach(File::delete);
+            }
+            Files.createDirectories(splitsDir);
+        } catch (IOException e) {
+            System.err.println("Cannot prepare splits directory: " + e.getMessage());
+            return;
+        }
+
+        // Comptage du nombre de lignes total dans le .wet
+        long totalLines = 0;
+        Path inputFile = Paths.get(textsPath);
+        try (BufferedReader countReader = Files.newBufferedReader(inputFile)) {
+            while (countReader.readLine() != null) totalLines++;
+        } catch (IOException e) {
+            System.err.println("Error counting lines in " + textsPath + ": " + e.getMessage());
+            return;
+        }
+
+        // Calcul des tailles de splits
+        long base = totalLines / nWorkers;
+        long rem = totalLines % nWorkers;
+
+        // Création des fichiers de splits
+        List<String> splits = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(inputFile)) {
+            for (int i = 0; i < nWorkers; i++) {
+                long linesToWrite = base + (i < rem ? 1 : 0);
+                Path splitFile = splitsDir.resolve("split" + i + ".wet");
+                try (BufferedWriter writer = Files.newBufferedWriter(splitFile)) {
+                    for (long j = 0; j < linesToWrite; j++) {
+                        String line = reader.readLine();
+                        if (line == null) break;
+                        writer.write(line);
+                        writer.newLine();
+                    }
+                }
+                splits.add(splitFile.toString());
+            }
+        } catch (IOException e) {
+            System.err.println("Error creating splits: " + e.getMessage());
+            return;
+        }
+
+        // Laisser le temps aux Workers de se connecter
         Thread.sleep(2000);
 
         // MAP phase
@@ -85,9 +135,7 @@ public class MasterMultiNodes {
         System.out.println("REDUCE FINISHED in " + (System.currentTimeMillis() - t2) + " ms");
 
         // Arrêt du serveur
-        try {
-            server.close();
-        } catch (IOException ignored) {}
+        try { server.close(); } catch (IOException ignored) {}
         exec.shutdown();
     }
 
@@ -105,7 +153,7 @@ public class MasterMultiNodes {
 
     public static void main(String[] args) throws InterruptedException {
         if (args.length < 1) {
-            System.err.println("Usage: java MasterMultiNodes <textsDir>");
+            System.err.println("Usage: java MasterMultiNodes <textsDirOrFile>");
             return;
         }
         MasterMultiNodes master = new MasterMultiNodes(args[0]);
@@ -113,11 +161,6 @@ public class MasterMultiNodes {
         master.runPipeline();
     }
 
-    /**
-     * Classe interne pour gérer un Worker connecté :
-     * - Lit les signaux SIGNAL:...
-     * - Envoie les commandes MAP/SHUFFLE/REDUCE
-     */
     private static class WorkerHandler implements Runnable {
         private final Socket sock;
         private final BufferedReader in;
