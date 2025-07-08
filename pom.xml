@@ -67,7 +67,7 @@
                             <goal>java</goal>
                         </goals>
                         <configuration>
-                            <mainClass>mapreduce.MapReduceMultiNodes</mainClass>
+                            <mainClass>mapreduce.MasterMultiNodes</mainClass>
                         </configuration>
                     </execution>
                 </executions>
