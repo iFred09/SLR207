@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+### COMPILATION ###
 echo "🔨 Compilation du code Java…"
-# Vide l'ancien bin, on repart sur du propre
 rm -rf bin
 mkdir -p bin
-# Compile tous les .java sous src/main/java
 find src/main/java -name '*.java' > sources.txt
 javac -d bin @sources.txt
 rm sources.txt
@@ -23,7 +22,18 @@ WORKERS=(
 )
 ### FIN CONFIGURATION ###
 
-echo "📦 Déploiement sur Workers..."
+# Détecte automatiquement le FQCN du Worker
+if [ -f "$BIN_DIR/WorkerMultiNodes.class" ]; then
+  WORKER_CLASS="WorkerMultiNodes"
+elif [ -f "$BIN_DIR/mapreduce/WorkerMultiNodes.class" ]; then
+  WORKER_CLASS="mapreduce.WorkerMultiNodes"
+else
+  echo "Erreur : WorkerMultiNodes.class introuvable dans $BIN_DIR"
+  exit 1
+fi
+
+# Déploiement et lancement des Workers
+echo "📦 Déploiement sur Workers…"
 for wp in "${WORKERS[@]}"; do
   IFS=':' read -r HOST PORT <<< "$wp"
   echo "→ $HOST (shuffle port $PORT)"
@@ -31,31 +41,31 @@ for wp in "${WORKERS[@]}"; do
   ssh "$HOST" "mkdir -p $REMOTE_DIR"
   scp -r "$BIN_DIR" "$WORKERS_FILE" "$HOST":"$REMOTE_DIR"/
 
-  # On passe la commande entière entre doubles quotes,
-  # et on échappe les guillemets intérieurs.
   ssh "$HOST" bash -lc "\
     cd $REMOTE_DIR && \
-    nohup java -cp $BIN_DIR mapreduce.WorkerMultiNodes $PORT $MASTER_IP \
+    nohup java -cp $BIN_DIR $WORKER_CLASS $PORT $MASTER_IP \
       > worker-$PORT.log 2>&1 & \
-    echo \"  [OK] WorkerMultiNodes lancé sur $HOST:$PORT\"\
+    echo \"  [OK] $WORKER_CLASS lancé sur $HOST:$PORT\"\
   "
 done
 
-echo
-echo "▶️  Démarrage du Master en local..."
-if [ ! -d "$BIN_DIR" ]; then
-  echo "Erreur : dossier $BIN_DIR introuvable dans $(pwd)"
-  exit 1
-fi
-if [ ! -f "$WORKERS_FILE" ]; then
-  echo "Erreur : $WORKERS_FILE introuvable dans $(pwd)"
+# Détecte automatiquement le FQCN du Master
+if [ -f "$BIN_DIR/MasterMultiNodes.class" ]; then
+  MASTER_CLASS="MasterMultiNodes"
+elif [ -f "$BIN_DIR/mapreduce/MasterMultiNodes.class" ]; then
+  MASTER_CLASS="mapreduce.MasterMultiNodes"
+else
+  echo "Erreur : MasterMultiNodes.class introuvable dans $BIN_DIR"
   exit 1
 fi
 
-nohup java -cp "$BIN_DIR" mapreduce.MasterMultiNodes "$WET_FILE" "$MASTER_IP" \
+# Lancement du Master en local
+echo
+echo "▶️  Démarrage du Master ($MASTER_CLASS)…"
+nohup java -cp "$BIN_DIR" "$MASTER_CLASS" "$WET_FILE" "$MASTER_IP" \
   > master.log 2>&1 &
 
-echo "  [OK] MasterMultiNodes lancé sur port 5000"
+echo "  [OK] $MASTER_CLASS lancé sur port 5000"
 echo
 echo "✅ Déploiement terminé."
 echo "   Logs Workers : worker-*.log sur chaque machine"
