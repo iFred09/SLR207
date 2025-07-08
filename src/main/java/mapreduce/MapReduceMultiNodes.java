@@ -22,10 +22,8 @@ public class MapReduceMultiNodes {
         String localIp = InetAddress.getLocalHost().getHostAddress();
 
         if (localIp.equals(masterIp)) {
-            System.out.println("master");
             runAsMaster(inputFile, workersList);
         } else {
-            System.out.println("worker");
             runAsWorker(masterIp);
         }
     }
@@ -35,7 +33,8 @@ public class MapReduceMultiNodes {
         int numWorkers = workersList.size() + 1;
         int chunkSize = allLines.size() / numWorkers;
 
-        List<String> masterChunk = allLines.subList(0, chunkSize);
+        List<String> rawMasterChunk = allLines.subList(0, chunkSize);
+        List<String> masterChunk = new ArrayList<>(rawMasterChunk);
         ChunkWordFrequencyThread masterTask = new ChunkWordFrequencyThread(masterChunk, 0, numWorkers);
         Thread masterThread = new Thread(masterTask);
         masterThread.start();
@@ -46,9 +45,12 @@ public class MapReduceMultiNodes {
                  ObjectOutputStream out = new ObjectOutputStream(sock.getOutputStream());
                  ObjectInputStream in = new ObjectInputStream(sock.getInputStream())) {
                 out.writeUTF("MAP");
-                List<String> chunk = allLines.subList((i + 1) * chunkSize,
-                        (i + 2 == numWorkers) ? allLines.size() : (i + 2) * chunkSize);
-                out.writeObject(chunk);
+                List<String> rawChunk = allLines.subList(
+                                       (i + 1) * chunkSize,
+                                       (i + 2 == numWorkers) ? allLines.size() : (i + 2) * chunkSize
+                                       );
+                       List<String> serializableChunk = new ArrayList<>(rawChunk);
+                       out.writeObject(serializableChunk);
                 out.flush();
                 in.readUTF();
             }
