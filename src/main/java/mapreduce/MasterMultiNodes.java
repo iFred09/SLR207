@@ -8,12 +8,13 @@ import java.util.concurrent.*;
 import java.util.stream.Stream;
 
 public class MasterMultiNodes {
-    private final int port;
+    private final int port = 5000;          // Port d'écoute fixe
+    private final String textsDir;          // Répertoire contenant les fichiers .wet
     private final List<WorkerHandler> workers = new ArrayList<>();
     private final ExecutorService exec = Executors.newCachedThreadPool();
 
-    public MasterMultiNodes(int port) {
-        this.port = port;
+    public MasterMultiNodes(String textsDir) {
+        this.textsDir = textsDir;
     }
 
     /**
@@ -43,15 +44,15 @@ public class MasterMultiNodes {
      * Exécute les phases Map, Shuffle, Reduce en séquence.
      */
     public void runPipeline() throws InterruptedException {
+        // Chargement des splits depuis le répertoire textsDir
         List<String> splits;
-        // Chargement des splits depuis le dossier texts/
-        try (Stream<Path> paths = Files.list(Paths.get("./texts"))) {
+        try (Stream<Path> paths = Files.list(Paths.get(textsDir))) {
             splits = paths
                     .filter(p -> p.toString().endsWith(".wet"))
-                    .map(p -> p.getFileName().toString())
+                    .map(Path::toString)    // chemin complet
                     .toList();
         } catch (IOException e) {
-            System.err.println("Error reading splits: " + e.getMessage());
+            System.err.println("Error reading splits in " + textsDir + ": " + e.getMessage());
             return;
         }
 
@@ -60,23 +61,18 @@ public class MasterMultiNodes {
         long t0 = System.currentTimeMillis();
         broadcast("MAP", splits);
         waitForPhase("MAP_DONE");
-        long mapTime = System.currentTimeMillis() - t0;
-        System.out.println("MAP FINISHED in " + mapTime + " ms");
+        System.out.println("MAP FINISHED in " + (System.currentTimeMillis() - t0) + " ms");
 
         long t1 = System.currentTimeMillis();
         broadcast("SHUFFLE", Collections.emptyList());
         waitForPhase("SHUFFLE_DONE");
-        long shuffleTime = System.currentTimeMillis() - t1;
-        System.out.println("SHUFFLE FINISHED in " + shuffleTime + " ms");
+        System.out.println("SHUFFLE FINISHED in " + (System.currentTimeMillis() - t1) + " ms");
 
         long t2 = System.currentTimeMillis();
         broadcast("REDUCE", Collections.emptyList());
         waitForPhase("REDUCE_DONE");
-        long reduceTime = System.currentTimeMillis() - t2;
-        System.out.println("REDUCE FINISHED in " + reduceTime + " ms");
+        System.out.println("REDUCE FINISHED in " + (System.currentTimeMillis() - t2) + " ms");
 
-        System.out.println("Longest phase: " + longest(mapTime, shuffleTime, reduceTime));
-        System.out.println("Fastest phase: " + fastest(mapTime, shuffleTime, reduceTime));
         exec.shutdown();
     }
 
@@ -87,24 +83,27 @@ public class MasterMultiNodes {
     }
 
     private void waitForPhase(String doneSignal) throws InterruptedException {
-        for (WorkerHandler w : workers) w.waitFor(doneSignal);
+        for (WorkerHandler w : workers) {
+            w.waitFor(doneSignal);
+        }
     }
 
-    private String longest(long m, long s, long r) {
-        return (m>=s && m>=r)?"MAP":(s>=m&&s>=r?"SHUFFLE":"REDUCE");
-    }
-
-    private String fastest(long m, long s, long r) {
-        return (m<=s && m<=r)?"MAP":(s<=m&&s<=r?"SHUFFLE":"REDUCE");
-    }
-
-    public static void main(String[] args) throws Exception {
-        int port = args.length>0?Integer.parseInt(args[0]):5000;
-        MasterMultiNodes master = new MasterMultiNodes(port);
+    public static void main(String[] args) throws InterruptedException {
+        if (args.length < 1) {
+            System.err.println("Usage: java MasterMultiNodes <textsDir>");
+            return;
+        }
+        String textsDir = args[0];
+        MasterMultiNodes master = new MasterMultiNodes(textsDir);
         master.start();
         master.runPipeline();
     }
 
+    /**
+     * Classe interne pour gérer un Worker connecté :
+     * - Lit les signaux SIGNAL:...
+     * - Envoie les commandes MAP/SHUFFLE/REDUCE
+     */
     private static class WorkerHandler implements Runnable {
         private final Socket sock;
         private final BufferedReader in;
@@ -121,20 +120,25 @@ public class MasterMultiNodes {
         public void run() {
             try {
                 String line;
-                while ((line=in.readLine())!=null) {
-                    if (line.startsWith("SIGNAL:")) signals.offer(line.substring(7));
+                while ((line = in.readLine()) != null) {
+                    if (line.startsWith("SIGNAL:")) {
+                        signals.offer(line.substring(7));
+                    }
                 }
-            } catch(IOException e) {
+            } catch (IOException e) {
                 System.err.println("Worker disconnected: " + e.getMessage());
             }
         }
 
         public void sendCommand(String cmd, List<String> args) {
-            out.println(cmd + (args.isEmpty()?"":" "+String.join(" ", args)));
+            out.println(cmd + (args.isEmpty() ? "" : " " + String.join(" ", args)));
         }
 
         public void waitFor(String doneSignal) throws InterruptedException {
-            while (!signals.take().equals(doneSignal));
+            String sig;
+            do {
+                sig = signals.take();
+            } while (!sig.equals(doneSignal));
         }
     }
 }
