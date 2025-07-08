@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "🔨 Compilation du code Java…"
+# Vide l'ancien bin, on repart sur du propre
+rm -rf bin
+mkdir -p bin
+# Compile tous les .java sous src/main/java
+find src/main/java -name '*.java' > sources.txt
+javac -d bin @sources.txt
+rm sources.txt
+
 ### CONFIGURATION ###
 BIN_DIR="bin"
 WORKERS_FILE="workers.txt"
