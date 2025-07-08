@@ -22,8 +22,10 @@ public class MapReduceMultiNodes {
         String localIp = InetAddress.getLocalHost().getHostAddress();
 
         if (localIp.equals(masterIp)) {
+            System.out.println("master");
             runAsMaster(inputFile, workersList);
         } else {
+            System.out.println("worker");
             runAsWorker(masterIp);
         }
     }
