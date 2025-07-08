@@ -18,6 +18,7 @@ public class MapReduce {
         long startTime = System.currentTimeMillis();
 
         // ------------ MAP PHASE ------------
+        long startMapTime = System.currentTimeMillis();
         ChunkWordFrequencyThread[] workers = new ChunkWordFrequencyThread[numberOfThreads];
         Thread[] threads = new Thread[numberOfThreads];
         int totalLines = allLines.size();
@@ -34,9 +35,12 @@ public class MapReduce {
         for (Thread t : threads) {
             t.join();
         }
+        long endMapTime = System.currentTimeMillis();
         System.out.println("MAP FINISHED");
+        System.out.println("Mapping time: " + (endMapTime - startMapTime) + " ms");
 
         // ------------ SHUFFLE PHASE ------------
+        long startShuffleTime = System.currentTimeMillis();
         // 1. Master sends list of workers to each worker
         for (ChunkWordFrequencyThread w : workers) {
             w.setWorkersRef(workers);
@@ -55,16 +59,21 @@ public class MapReduce {
         for (Thread t : shuffleThreads) {
             t.join();
         }
+        long endShuffleTime = System.currentTimeMillis();
         System.out.println("SHUFFLE FINISHED");
+        System.out.println("Shuffle time: " + (endShuffleTime - startShuffleTime) + " ms");
 
         // ------------ REDUCE PHASE ------------
+        long startReduceTime = System.currentTimeMillis();
         Map<String, Integer> finalFreq = new HashMap<>();
         for (ChunkWordFrequencyThread w : workers) {
             for (Map.Entry<String, Integer> entry : w.getReceivedData().entrySet()) {
                 finalFreq.merge(entry.getKey(), entry.getValue(), Integer::sum);
             }
         }
+        long endReduceTime = System.currentTimeMillis();
         System.out.println("REDUCE FINISHED");
+        System.out.println("Reduce time: " + (endReduceTime - startReduceTime) + " ms");
         // Print results
         StringBuilder sb = new StringBuilder();
         sb.append("Top 20 words: \n");
