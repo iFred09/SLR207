@@ -4,6 +4,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class MapReduceMultiNodes {
     private static final int PORT = 5000;
@@ -17,11 +18,9 @@ public class MapReduceMultiNodes {
         String inputFile = args[0];
         String masterIp  = args[1];
 
-        // Read list of worker IPs from workers.txt at project root
         List<String> workersList = Files.readAllLines(Paths.get(WORKERS_FILE));
-        int numMachines = workersList.size() + 1; // include master
-
         String localIp = InetAddress.getLocalHost().getHostAddress();
+
         if (localIp.equals(masterIp)) {
             runAsMaster(inputFile, workersList);
         } else {
@@ -30,18 +29,15 @@ public class MapReduceMultiNodes {
     }
 
     private static void runAsMaster(String inputFile, List<String> workersList) throws Exception {
-        // 1. Read input
         List<String> allLines = Files.readAllLines(Paths.get(inputFile));
         int numWorkers = workersList.size() + 1;
         int chunkSize = allLines.size() / numWorkers;
 
-        // 2. Launch map on master chunk
         List<String> masterChunk = allLines.subList(0, chunkSize);
         ChunkWordFrequencyThread masterTask = new ChunkWordFrequencyThread(masterChunk, 0, numWorkers);
         Thread masterThread = new Thread(masterTask);
         masterThread.start();
 
-        // 3. Send chunks to workers via TCP
         for (int i = 0; i < workersList.size(); i++) {
             String workerIp = workersList.get(i);
             try (Socket sock = new Socket(workerIp, PORT);
@@ -52,13 +48,12 @@ public class MapReduceMultiNodes {
                         (i + 2 == numWorkers) ? allLines.size() : (i + 2) * chunkSize);
                 out.writeObject(chunk);
                 out.flush();
-                in.readUTF(); // ACK_MAP
+                in.readUTF();
             }
         }
         masterThread.join();
         System.out.println("MAP FINISHED");
 
-        // 4. Notify workers for shuffle
         List<String> allHosts = new ArrayList<>();
         allHosts.add(InetAddress.getLocalHost().getHostAddress());
         allHosts.addAll(workersList);
@@ -69,20 +64,17 @@ public class MapReduceMultiNodes {
                 out.writeUTF("SHUFFLE");
                 out.writeObject(allHosts);
                 out.flush();
-                in.readUTF(); // ACK_SHUFFLE
+                in.readUTF();
             }
         }
         System.out.println("SHUFFLE FINISHED");
 
-        // 5. Collect reduced data from master and workers
         Map<String, Integer> finalFreq = new HashMap<>();
-        // Master local shuffle
         masterTask.prepareShuffle();
-        masterTask.setWorkersRef(createLocalWorkersRef(workersList.size() + 1));
+        masterTask.setWorkersRef(createLocalWorkersRef(allHosts));
         masterTask.executeShuffle();
         masterTask.getReceivedData().forEach((k, v) -> finalFreq.merge(k, v, Integer::sum));
 
-        // Collect from each worker
         for (String host : workersList) {
             try (Socket sock = new Socket(host, PORT);
                  ObjectOutputStream out = new ObjectOutputStream(sock.getOutputStream());
@@ -95,7 +87,6 @@ public class MapReduceMultiNodes {
             }
         }
 
-        // 6. Print top 20 words by frequency
         StringBuilder sb = new StringBuilder();
         finalFreq.entrySet().stream()
                 .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
@@ -104,12 +95,17 @@ public class MapReduceMultiNodes {
         System.out.print(sb.toString());
     }
 
-    private static ChunkWordFrequencyThread[] createLocalWorkersRef(int total) {
-        // Placeholder: in a real setup, we'd hold references to remote stubs
-        return new ChunkWordFrequencyThread[total];
+    private static ChunkWordFrequencyThread[] createLocalWorkersRef(List<String> hosts) {
+        int n = hosts.size();
+        ChunkWordFrequencyThread[] refs = new ChunkWordFrequencyThread[n];
+        refs[0] = null;
+        return refs;
     }
 
     private static void runAsWorker(String masterIp) throws Exception {
+        Map<String, Integer> localFreq = new HashMap<>();
+        Map<String, Integer> receivedData = new ConcurrentHashMap<>();
+
         try (ServerSocket server = new ServerSocket(PORT)) {
             while (true) {
                 try (Socket sock = server.accept();
@@ -119,30 +115,55 @@ public class MapReduceMultiNodes {
                     if ("MAP".equals(cmd)) {
                         @SuppressWarnings("unchecked")
                         List<String> chunk = (List<String>) in.readObject();
-                        ChunkWordFrequencyThread task = new ChunkWordFrequencyThread(chunk, 0, 0);
-                        task.run();
+                        for (String line : chunk) {
+                            for (String token : line
+                                    .toLowerCase()
+                                    .replaceAll("[^a-z0-9\\s]", "")
+                                    .split("\\s+")) {
+                                if (!token.isEmpty())
+                                    localFreq.merge(token, 1, Integer::sum);
+                            }
+                        }
                         out.writeUTF("ACK_MAP");
                         out.flush();
                     } else if ("SHUFFLE".equals(cmd)) {
                         @SuppressWarnings("unchecked")
                         List<String> hosts = (List<String>) in.readObject();
-                        // TODO: implement shuffle partitioning and communication
+                        int numHosts = hosts.size();
+                        Map<Integer, Map<String, Integer>> buckets = new HashMap<>();
+                        for (Map.Entry<String, Integer> e : localFreq.entrySet()) {
+                            int dest = (e.getKey().hashCode() & Integer.MAX_VALUE) % numHosts;
+                            buckets.computeIfAbsent(dest, k -> new HashMap<>()).put(e.getKey(), e.getValue());
+                        }
+                        for (int i = 0; i < hosts.size(); i++) {
+                            String host = hosts.get(i);
+                            try (Socket s2 = new Socket(host, PORT);
+                                 ObjectOutputStream o2 = new ObjectOutputStream(s2.getOutputStream());
+                                 ObjectInputStream i2 = new ObjectInputStream(s2.getInputStream())) {
+                                o2.writeUTF("SHUFFLE_BUCKET");
+                                o2.writeObject(buckets.getOrDefault(i, Collections.emptyMap()));
+                                o2.flush();
+                                i2.readUTF();
+                            }
+                        }
                         out.writeUTF("ACK_SHUFFLE");
                         out.flush();
+                    } else if ("SHUFFLE_BUCKET".equals(cmd)) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Integer> bucket = (Map<String, Integer>) in.readObject();
+                        bucket.forEach((k, v) -> receivedData.merge(k, v, Integer::sum));
+                        out.writeUTF("ACK_BUCKET");
+                        out.flush();
                     } else if ("RESULT".equals(cmd)) {
-                        Map<String, Integer> result = new HashMap<>();
-                        // TODO: return the local reduced data after shuffle
-                        out.writeObject(result);
+                        out.writeObject(receivedData);
                         out.flush();
                     }
                 } catch (IOException | ClassNotFoundException e) {
-                    System.err.println("Error handling worker connection: " + e.getMessage());
-                    e.printStackTrace();
+                    System.err.println("Error handling connection: " + e.getMessage());
                 }
             }
         } catch (IOException e) {
-            System.err.println("Could not start worker server on port " + PORT + ": " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Could not start server on port " + PORT + ": " + e.getMessage());
         }
     }
 }
