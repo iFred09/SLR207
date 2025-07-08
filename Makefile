@@ -41,8 +41,8 @@ run-countandfreq: compile
 
 ## Run the multi-node MapReduce (needs FILE and MASTER_IP)
 run-multinodes: compile
-	@echo "Running mapreduce.MapReduceMultiNodes on '$(FILE)' with master '$(MASTER_IP)'"
-	@java -cp "$(CLASSPATH)" mapreduce.MapReduceMultiNodes "$(FILE)" $(MASTER_IP)
+	@echo "Running mapreduce.MasterMultiNodes on '$(FILE)' with master '$(MASTER_IP)'"
+	@java -cp "$(CLASSPATH)" mapreduce.MasterMultiNodes "$(FILE)" $(MASTER_IP)
 
 ## Wipe out compiled classes
 clean:
