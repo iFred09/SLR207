@@ -26,7 +26,7 @@ for wp in "${WORKERS[@]}"; do
   # et on échappe les guillemets intérieurs.
   ssh "$HOST" bash -lc "\
     cd $REMOTE_DIR && \
-    nohup java -cp $BIN_DIR WorkerMultiNodes $PORT $MASTER_IP \
+    nohup java -cp $BIN_DIR mapreduce.WorkerMultiNodes $PORT $MASTER_IP \
       > worker-$PORT.log 2>&1 & \
     echo \"  [OK] WorkerMultiNodes lancé sur $HOST:$PORT\"\
   "
@@ -43,7 +43,7 @@ if [ ! -f "$WORKERS_FILE" ]; then
   exit 1
 fi
 
-nohup java -cp "$BIN_DIR" MasterMultiNodes "$WET_FILE" "$MASTER_IP" \
+nohup java -cp "$BIN_DIR" mapreduce.MasterMultiNodes "$WET_FILE" "$MASTER_IP" \
   > master.log 2>&1 &
 
 echo "  [OK] MasterMultiNodes lancé sur port 5000"
