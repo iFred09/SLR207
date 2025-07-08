@@ -10,8 +10,9 @@ import java.util.stream.Stream;
 public class MasterMultiNodes {
     private final int port = 5000;          // Port d'écoute fixe
     private final String textsDir;          // Répertoire contenant les fichiers .wet
-    private final List<WorkerHandler> workers = new ArrayList<>();
+    private final List<WorkerHandler> workers = new CopyOnWriteArrayList<>();
     private final ExecutorService exec = Executors.newCachedThreadPool();
+    private ServerSocket server;            // Serveur principal
 
     public MasterMultiNodes(String textsDir) {
         this.textsDir = textsDir;
@@ -21,23 +22,29 @@ public class MasterMultiNodes {
      * Démarre le serveur Master et accepte les connexions des Workers.
      */
     public void start() {
-        try (ServerSocket server = new ServerSocket(port)) {
+        try {
+            server = new ServerSocket(port);
             System.out.println("Master listening on port " + port);
-            exec.submit(() -> {
-                while (!Thread.currentThread().isInterrupted()) {
-                    try {
-                        Socket sock = server.accept();
-                        WorkerHandler handler = new WorkerHandler(sock);
-                        workers.add(handler);
-                        exec.submit(handler);
-                    } catch (IOException e) {
-                        System.err.println("Error accepting worker connection: " + e.getMessage());
-                    }
-                }
-            });
         } catch (IOException e) {
             System.err.println("Failed to start Master on port " + port + ": " + e.getMessage());
+            return;
         }
+
+        // Accept worker connections asynchronously
+        exec.submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Socket sock = server.accept();
+                    WorkerHandler handler = new WorkerHandler(sock);
+                    workers.add(handler);
+                    exec.submit(handler);
+                } catch (IOException e) {
+                    System.err.println("Error accepting worker connection: " + e.getMessage());
+                    // If server is closed, break
+                    if (server.isClosed()) break;
+                }
+            }
+        });
     }
 
     /**
@@ -45,7 +52,7 @@ public class MasterMultiNodes {
      */
     public void runPipeline() throws InterruptedException {
         // Chargement des splits depuis le répertoire textsDir
-        List<String> splits;
+        List<String> splits = new ArrayList<>();
         try (Stream<Path> paths = Files.list(Paths.get(textsDir))) {
             splits = paths
                     .filter(p -> p.toString().endsWith(".wet"))
@@ -56,23 +63,31 @@ public class MasterMultiNodes {
             return;
         }
 
-        Thread.sleep(2000); // laisser le temps aux Workers de se connecter
+        // Donne le temps aux Workers de se connecter
+        Thread.sleep(2000);
 
+        // MAP phase
         long t0 = System.currentTimeMillis();
         broadcast("MAP", splits);
         waitForPhase("MAP_DONE");
         System.out.println("MAP FINISHED in " + (System.currentTimeMillis() - t0) + " ms");
 
+        // SHUFFLE phase
         long t1 = System.currentTimeMillis();
         broadcast("SHUFFLE", Collections.emptyList());
         waitForPhase("SHUFFLE_DONE");
         System.out.println("SHUFFLE FINISHED in " + (System.currentTimeMillis() - t1) + " ms");
 
+        // REDUCE phase
         long t2 = System.currentTimeMillis();
         broadcast("REDUCE", Collections.emptyList());
         waitForPhase("REDUCE_DONE");
         System.out.println("REDUCE FINISHED in " + (System.currentTimeMillis() - t2) + " ms");
 
+        // Arrêt du serveur
+        try {
+            server.close();
+        } catch (IOException ignored) {}
         exec.shutdown();
     }
 
@@ -93,8 +108,7 @@ public class MasterMultiNodes {
             System.err.println("Usage: java MasterMultiNodes <textsDir>");
             return;
         }
-        String textsDir = args[0];
-        MasterMultiNodes master = new MasterMultiNodes(textsDir);
+        MasterMultiNodes master = new MasterMultiNodes(args[0]);
         master.start();
         master.runPipeline();
     }
